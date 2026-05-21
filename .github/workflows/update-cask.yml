@@ -1,0 +1,113 @@
+name: update cask
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version to publish, with or without leading v. Defaults to latest release."
+        required: false
+        type: string
+  repository_dispatch:
+    types: [apfs-fastindex-release]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-cask
+  cancel-in-progress: false
+
+jobs:
+  update:
+    name: update apfs-fastindex cask
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      APP_REPO: NicoNekoru/apfs-fastindex
+      CASK_FILE: Casks/apfs-fastindex.rb
+    steps:
+      - name: Check out tap
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Resolve release version
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          raw_version="${{ github.event.inputs.version || github.event.client_payload.version || '' }}"
+          if [ -n "$raw_version" ]; then
+            tag="v${raw_version#v}"
+          else
+            tag="$(gh release view --repo "$APP_REPO" --json tagName --jq .tagName)"
+          fi
+
+          version="${tag#v}"
+          if ! [[ "$tag" =~ ^v[0-9]+(\.[0-9]+){1,2}([-+][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Unexpected release tag: $tag" >&2
+            exit 1
+          fi
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Download release DMG
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag="${{ steps.release.outputs.tag }}"
+          version="${{ steps.release.outputs.version }}"
+          asset="ApfsFastindex-v${version}-macos-arm64.dmg"
+
+          mkdir -p release-asset
+          gh release download "$tag" \
+            --repo "$APP_REPO" \
+            --pattern "$asset" \
+            --dir release-asset
+
+          if [ ! -f "release-asset/$asset" ]; then
+            echo "Release asset not found: $asset" >&2
+            exit 1
+          fi
+
+          sha256sum "release-asset/$asset" | awk '{ print "sha256="$1 }' >> "$GITHUB_ENV"
+
+      - name: Update cask
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version="${{ steps.release.outputs.version }}"
+          export VERSION="$version"
+          export SHA256="$sha256"
+
+          ruby -0777 -i -pe '
+            version = ENV.fetch("VERSION")
+            sha256 = ENV.fetch("SHA256")
+            version_updated = $_.gsub!(/^  version ".*"$/, "  version \"#{version}\"")
+            sha256_updated = $_.gsub!(/^  sha256 "[0-9a-f]{64}"$/, "  sha256 \"#{sha256}\"")
+            unless version_updated && sha256_updated
+              warn "Expected version and sha256 lines were not both updated"
+              exit 1
+            end
+          ' "$CASK_FILE"
+
+          grep -q "version \"$version\"" "$CASK_FILE"
+          grep -q "sha256 \"$sha256\"" "$CASK_FILE"
+
+      - name: Commit cask update
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if git diff --quiet -- "$CASK_FILE"; then
+            echo "Cask already up to date for ${{ steps.release.outputs.tag }}."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$CASK_FILE"
+          git commit -m "release: ${{ steps.release.outputs.tag }}"
+          git push
