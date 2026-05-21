@@ -49,6 +49,48 @@ cask "apfs-fastindex" do
 
   app "ApfsFastindex.app"
 
+  # Post-install cleanup. The app is ad-hoc signed (no Developer
+  # ID, no notarization). macOS Sonoma 14+ shows the "Apple could
+  # not verify [App] is free of malware" dialog on first launch
+  # whenever it sees ANY extended attribute residue, not just
+  # `com.apple.quarantine`. Brew's default strip targets only
+  # `com.apple.quarantine`; clear everything else (provenance,
+  # WhereFroms, etc.) so the first launch goes through cleanly.
+  #
+  # `-cr` clears all xattrs recursively. We do this against the
+  # installed `.app` (whichever `appdir` resolves to — typically
+  # `/Applications`) and every nested helper, which is where
+  # Sparkle.framework's XPC services + Updater.app live.
+  postflight do
+    system_command "/usr/bin/xattr",
+                   args: ["-cr", "#{appdir}/ApfsFastindex.app"],
+                   sudo: false
+  end
+
+  # First-launch caveats. Even with all xattrs cleared, macOS
+  # 14.0+ may still pop the verification dialog on the very
+  # first launch. The user has to either:
+  #   - right-click the app, pick Open, then click Open again
+  #     in the confirmation sheet, or
+  #   - go to Settings > Privacy & Security and click "Open
+  #     Anyway" on the warning shown there.
+  # Either path is one-time per install.
+  caveats <<~EOS
+    apfs-fastindex is ad-hoc signed (no Developer ID). On first
+    launch macOS may show:
+
+        "Apple could not verify apfs-fastindex is free of malware"
+
+    Right-click the app in /Applications and pick Open, then
+    click Open again to confirm. Subsequent launches go through
+    without the prompt. This is a one-time step per install.
+
+    If you'd prefer the no-prompt experience, a notarized build
+    requires the maintainer to enroll in the Apple Developer
+    Program ($99/yr). See the project README for the current
+    plan.
+  EOS
+
   # `zap` removes user-level state on `brew uninstall --zap`.
   # Conservative list — only the prefs file we know we write.
   # Sparkle's own state lives in the same prefs file.
