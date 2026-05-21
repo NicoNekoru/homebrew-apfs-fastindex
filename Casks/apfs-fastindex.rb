@@ -39,7 +39,7 @@ cask "apfs-fastindex" do
   # `make-release.sh` flow targets the build host's arch). If
   # an Intel build is added later, remove this line and add an
   # `arch intel: "...", arm: "..."` block at the top.
-  depends_on arch: "arm64"
+  depends_on arch: :arm64
 
   # macOS 13+ matches CFBundleSupportedPlatforms in the
   # Info.plist; brew rejects the install with a clear message
